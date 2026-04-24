@@ -1,0 +1,23 @@
+node_modules/
+dist/
+build/
+coverage/
+*.log
+.env
+.env.local
+.env.*.local
+.DS_Store
+.vscode/
+.idea/
+
+# Swiss Ephemeris data files (downloaded separately, see README)
+apps/api/ephe/*.se1
+apps/api/ephe/sefstars.txt
+apps/api/ephe/seasnam.txt
+apps/api/ephe/seleapsec.txt
+
+# Prisma
+apps/api/prisma/migrations/dev.db*
+
+# Build artifacts
+*.tsbuildinfo
