@@ -1,0 +1,31 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model BirthData {
+  id        String           @id @default(cuid())
+  label     String
+  lat       Float
+  lon       Float
+  utc       DateTime
+  hsys      String           @default("P")
+  createdAt DateTime         @default(now())
+  sessions  TransitSession[]
+}
+
+model TransitSession {
+  id          String    @id @default(cuid())
+  birthDataId String
+  birthData   BirthData @relation(fields: [birthDataId], references: [id], onDelete: Cascade)
+  startUtc    DateTime
+  endUtc      DateTime
+  config      Json
+  createdAt   DateTime  @default(now())
+
+  @@index([birthDataId])
+}

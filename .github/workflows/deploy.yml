@@ -1,0 +1,104 @@
+name: Deploy to VestaCP
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Generate Prisma client
+        run: npm --workspace apps/api exec prisma generate
+
+      - name: Build all
+        run: npm run build
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Add server to known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -p ${{ secrets.SSH_PORT }} -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Run prisma migrate deploy on server
+        env:
+          DEPLOY_PATH_API: ${{ secrets.DEPLOY_PATH_API }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+        run: |
+          # We send the prisma schema and run migrate deploy with the production DATABASE_URL on the server.
+          rsync -av --delete -e "ssh -p ${SSH_PORT}" apps/api/prisma/ \
+            ${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH_API}/prisma/
+
+      - name: Rsync API artifacts
+        env:
+          DEPLOY_PATH_API: ${{ secrets.DEPLOY_PATH_API }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+        run: |
+          rsync -av --delete -e "ssh -p ${SSH_PORT}" \
+            apps/api/dist/ \
+            ${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH_API}/dist/
+          rsync -av -e "ssh -p ${SSH_PORT}" \
+            apps/api/package.json \
+            apps/api/ecosystem.config.cjs \
+            ${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH_API}/
+          rsync -av -e "ssh -p ${SSH_PORT}" package-lock.json ${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH_API}/
+
+          # ephemeris-core compiled output (consumed via @natalna/ephemeris-core/node)
+          ssh -p ${SSH_PORT} ${SSH_USER}@${SSH_HOST} "mkdir -p ${DEPLOY_PATH_API}/packages/ephemeris-core/dist"
+          rsync -av --delete -e "ssh -p ${SSH_PORT}" \
+            packages/ephemeris-core/dist/ \
+            ${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH_API}/packages/ephemeris-core/dist/
+          rsync -av -e "ssh -p ${SSH_PORT}" \
+            packages/ephemeris-core/package.json \
+            ${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH_API}/packages/ephemeris-core/
+
+      - name: Rsync web artifacts
+        env:
+          DEPLOY_PATH_WEB: ${{ secrets.DEPLOY_PATH_WEB }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+        run: |
+          rsync -av --delete -e "ssh -p ${SSH_PORT}" \
+            apps/web/dist/ \
+            ${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH_WEB}/
+
+      - name: Install prod deps, run migrations, reload pm2
+        env:
+          DEPLOY_PATH_API: ${{ secrets.DEPLOY_PATH_API }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+        run: |
+          ssh -p ${SSH_PORT} ${SSH_USER}@${SSH_HOST} bash -lc "'
+            set -e
+            cd ${DEPLOY_PATH_API}
+            npm install --omit=dev --no-audit --no-fund
+            npx prisma migrate deploy
+            pm2 startOrReload ecosystem.config.cjs --update-env
+            pm2 save
+          '"
